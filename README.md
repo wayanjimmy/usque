@@ -14,6 +14,7 @@ Usque is an open-source reimplementation of the Cloudflare WARP client's MASQUE 
           - [🥚➡️🍏🍎](#️)
   - [Table of Contents](#table-of-contents)
   - [Installation](#installation)
+    - [Docker](#docker)
   - [Usage](#usage)
     - [Registration](#registration)
     - [Enrolling](#enrolling)
@@ -57,6 +58,20 @@ And that will produce an `usque` binary in the current directory.
 If you would rather cross compile, set the `GOOS` and `GOARCH` environment variables accordingly. For example, to build for Windows on a Linux system:
 ```shell
 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" .
+```
+
+### Docker
+
+You can deploy the tool using Docker. [Dockerfile](Dockerfile) is provided in the repository. To build the image, run:
+
+```shell
+docker build -t usque:latest .
+```
+
+Example usage *(spawns a SOCKS proxy and exposes it on port 1080)*:
+
+```shell
+docker run -it --rm -p 1080:1080 usque:latest socks
 ```
 
 ## Usage
