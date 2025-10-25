@@ -1,0 +1,40 @@
+name: Build
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.forgejo/workflows/trigger/release-usque'
+jobs:
+
+  usque:
+    name: Setup, Build, Publish Usque
+    runs-on: linux-amd64
+    env:
+      DOCKER_REGISTRY: docker.io/wayanjimmy/usque
+    steps:
+
+    - name: Checkout code
+      uses: actions/checkout@v3
+      with:
+        github-server-url: ${{ vars.GIT_SERVER_URL }}
+
+    - name: Get Git SHA
+      run: |
+        GIT_COMMIT_HASH_SHORT=$(git rev-parse --short HEAD)
+        GIT_COMMIT_DATETIME=$(git show -s --date=format:'%Y%m%d%H%M%S' --format=%cd $GIT_COMMIT_HASH_SHORT)
+        TAG="main-$GIT_COMMIT_HASH_SHORT-$GIT_COMMIT_DATETIME"
+        echo "TAG=$TAG" >> $GITHUB_ENV
+
+    - name: Build and Push Image
+      env:
+        CI_REGISTRY_USER: ${{ secrets.CI_REGISTRY_USER }}
+        CI_REGISTRY_PASSWORD: ${{ secrets.CI_REGISTRY_PASSWORD }}
+        HTTP_PROXY: ""
+        HTTPS_PROXY: ""
+        ALL_PROXY: ""
+      run: |
+        podman login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD docker.io
+        podman build --format=docker -t $DOCKER_REGISTRY:$TAG .
+        podman push $DOCKER_REGISTRY:$TAG
+
