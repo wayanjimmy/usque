@@ -103,14 +103,26 @@ var enrollCmd = &cobra.Command{
 						log.Fatalf("Failed to enroll key: %v", err)
 					}
 				} else {
-					log.Fatalf("Enrollment aborted by user. API errors: %s", apiErr.ErrorsAsString("; "))
+					if apiErr != nil {
+						log.Fatalf("Enrollment aborted by user. API errors: %s", apiErr.ErrorsAsString("; "))
+					}
+					log.Fatal("Enrollment aborted by user.")
 				}
 			} else {
-				log.Fatalf("Failed to enroll key: %v (API errors: %s)", err, apiErr.ErrorsAsString("; "))
+				// apiErr is nil on transport errors etc. (#86).
+				if apiErr != nil {
+					log.Fatalf("Failed to enroll key: %v (API errors: %s)", err, apiErr.ErrorsAsString("; "))
+				}
+				log.Fatalf("Failed to enroll key: %v", err)
 			}
 		}
 
 		log.Printf("Successful registration. Saving config...")
+
+		h2v4 := config.AppConfig.EndpointH2V4
+		if h2v4 == "" {
+			h2v4 = config.DefaultEndpointH2V4
+		}
 
 		config.AppConfig = config.Config{
 			PrivateKey: base64.StdEncoding.EncodeToString(privKeyBytes),
@@ -119,6 +131,8 @@ var enrollCmd = &cobra.Command{
 			EndpointV4: updatedAccountData.Config.Peers[0].Endpoint.V4[:len(updatedAccountData.Config.Peers[0].Endpoint.V4)-2],
 			// strip [ from beginning and ]:0 from end
 			EndpointV6:     updatedAccountData.Config.Peers[0].Endpoint.V6[1 : len(updatedAccountData.Config.Peers[0].Endpoint.V6)-3],
+			EndpointH2V4:   h2v4,
+			EndpointH2V6:   config.AppConfig.EndpointH2V6,
 			EndpointPubKey: updatedAccountData.Config.Peers[0].PublicKey,
 			License:        updatedAccountData.Account.License,
 			ID:             updatedAccountData.ID,
@@ -127,7 +141,9 @@ var enrollCmd = &cobra.Command{
 			IPv6:           updatedAccountData.Config.Interface.Addresses.V6,
 		}
 
-		config.AppConfig.SaveConfig(configPath)
+		if err := config.AppConfig.SaveConfig(configPath); err != nil {
+			log.Fatalf("Failed to save config: %v", err)
+		}
 
 		log.Printf("Config saved to %s", configPath)
 	},
