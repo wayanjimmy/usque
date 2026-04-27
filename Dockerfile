@@ -1,4 +1,4 @@
-FROM golang:1.25.5-alpine AS builder
+FROM docker.io/golang:1.25.5-alpine AS builder
 
 WORKDIR /app
 
@@ -12,7 +12,7 @@ COPY . .
 RUN go build -o usque -ldflags="-s -w" .
 
 # scratch won't be enough, because we need a cert store
-FROM alpine:latest
+FROM docker.io/alpine:latest
 
 WORKDIR /app
 
