@@ -59,6 +59,7 @@ func NewSOCKS5Server(cfg SOCKS5Config) (*SOCKS5Server, error) {
 	}
 
 	s := &SOCKS5Server{cfg: cfg, server: srv}
+	srv.LimitUDP = true
 	socks5.DialTCP = s.dialTCP
 	socks5.DialUDP = s.dialUDP
 	return s, nil
@@ -288,6 +289,7 @@ func (s *SOCKS5Server) TCPHandle(srv *socks5.Server, c *net.TCPConn, r *socks5.R
 				}
 				n, err := rc.Read(buf)
 				if err != nil {
+					_ = c.CloseWrite()
 					return
 				}
 				if _, err := c.Write(buf[:n]); err != nil {
@@ -356,8 +358,15 @@ func (s *SOCKS5Server) UDPHandle(srv *socks5.Server, addr *net.UDPAddr, d *socks
 		return send(iue.(*socks5.UDPExchange), d.Data)
 	}
 
+	select {
+	case udpRelaySem <- struct{}{}:
+	default:
+		return fmt.Errorf("too many active UDP relay exchanges")
+	}
+
 	rc, err := socks5.DialUDP("udp", "", dst)
 	if err != nil {
+		<-udpRelaySem
 		return err
 	}
 	ue := &socks5.UDPExchange{
@@ -366,12 +375,11 @@ func (s *SOCKS5Server) UDPHandle(srv *socks5.Server, addr *net.UDPAddr, d *socks
 	}
 	if err := send(ue, d.Data); err != nil {
 		_ = ue.RemoteConn.Close()
+		<-udpRelaySem
 		return err
 	}
 	srv.UDPExchanges.Set(src+dst, ue, -1)
 
-	// Block if too many relay goroutines; each holds a pooled read buffer until exit.
-	udpRelaySem <- struct{}{}
 	go func(ue *socks5.UDPExchange, dst string) {
 		defer func() {
 			_ = ue.RemoteConn.Close()
