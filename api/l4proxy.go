@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -48,7 +49,15 @@ type L4Proxy struct {
 	onDisconnect      func(target string)
 	connectTimeout    time.Duration
 	connectRetryCount int
+	connMu            sync.Mutex
+	client            *l4HTTP3Client
 	dialFn            func(context.Context, string) (*l4TCPConn, error)
+}
+
+type l4HTTP3Client struct {
+	udpConn    *net.UDPConn
+	quicConn   *quic.Conn
+	clientConn *http3.ClientConn
 }
 
 // NewL4Proxy creates an L4 proxy dialer from a configuration struct.
@@ -156,6 +165,75 @@ func (p *L4Proxy) resolveTarget(ctx context.Context, target string) (string, err
 }
 
 func (p *L4Proxy) dial(ctx context.Context, target string) (*l4TCPConn, error) {
+	h3Client, err := p.getOrCreateClientConn(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	stream, err := h3Client.clientConn.OpenRequestStream(ctx)
+	if err != nil {
+		if !shouldReconnectOnOpenStreamError(ctx, err) {
+			return nil, err
+		}
+		// The cached HTTP/3 connection might be stale; reconnect once and retry.
+		p.closeClientConnIfCurrent(h3Client)
+		h3Client, err = p.getOrCreateClientConn(ctx)
+		if err != nil {
+			return nil, err
+		}
+		stream, err = h3Client.clientConn.OpenRequestStream(ctx)
+		if err != nil {
+			if shouldReconnectOnOpenStreamError(ctx, err) {
+				p.closeClientConnIfCurrent(h3Client)
+			}
+			return nil, err
+		}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodConnect, "https://"+target, nil)
+	if err != nil {
+		_ = stream.Close()
+		return nil, err
+	}
+	req.Host = target
+	if err := stream.SendRequestHeader(req); err != nil {
+		_ = stream.Close()
+		return nil, err
+	}
+	response, err := stream.ReadResponse()
+	if err != nil {
+		_ = stream.Close()
+		return nil, err
+	}
+	if response.StatusCode < 200 || response.StatusCode > 299 {
+		_ = stream.Close()
+		return nil, fmt.Errorf("CONNECT rejected with status %d", response.StatusCode)
+	}
+	return &l4TCPConn{stream: stream, local: h3Client.udpConn.LocalAddr(), remote: l4Addr(target)}, nil
+}
+
+func shouldReconnectOnOpenStreamError(ctx context.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	if ctx != nil && (errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded)) {
+		return false
+	}
+	return true
+}
+
+func (p *L4Proxy) getOrCreateClientConn(ctx context.Context) (*l4HTTP3Client, error) {
+	p.connMu.Lock()
+	if p.client != nil {
+		client := p.client
+		p.connMu.Unlock()
+		return client, nil
+	}
+	p.connMu.Unlock()
+
 	udpConn, err := listenUDPForEndpoint(p.endpoint)
 	if err != nil {
 		return nil, err
@@ -166,32 +244,39 @@ func (p *L4Proxy) dial(ctx context.Context, target string) (*l4TCPConn, error) {
 		return nil, err
 	}
 
-	client := (&http3.Transport{}).NewClientConn(quicConn)
-	stream, err := client.OpenRequestStream(ctx)
-	if err != nil {
-		closeL4HTTP3(udpConn, quicConn)
-		return nil, err
+	newClient := &l4HTTP3Client{
+		udpConn:    udpConn,
+		quicConn:   quicConn,
+		clientConn: (&http3.Transport{}).NewClientConn(quicConn),
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodConnect, "https://"+target, nil)
-	if err != nil {
-		closeL4HTTP3(udpConn, quicConn)
-		return nil, err
+
+	p.connMu.Lock()
+	if p.client != nil {
+		current := p.client
+		p.connMu.Unlock()
+		closeL4HTTP3(newClient.udpConn, newClient.quicConn)
+		return current, nil
 	}
-	req.Host = target
-	if err := stream.SendRequestHeader(req); err != nil {
-		closeL4HTTP3(udpConn, quicConn)
-		return nil, err
+	p.client = newClient
+	p.connMu.Unlock()
+
+	return newClient, nil
+}
+
+func (p *L4Proxy) closeClientConnIfCurrent(expected *l4HTTP3Client) {
+	if expected == nil {
+		return
 	}
-	response, err := stream.ReadResponse()
-	if err != nil {
-		closeL4HTTP3(udpConn, quicConn)
-		return nil, err
+
+	p.connMu.Lock()
+	if p.client != expected {
+		p.connMu.Unlock()
+		return
 	}
-	if response.StatusCode < 200 || response.StatusCode > 299 {
-		closeL4HTTP3(udpConn, quicConn)
-		return nil, fmt.Errorf("CONNECT rejected with status %d", response.StatusCode)
-	}
-	return &l4TCPConn{stream: stream, udpConn: udpConn, quicConn: quicConn, remote: l4Addr(target)}, nil
+	p.client = nil
+	p.connMu.Unlock()
+
+	closeL4HTTP3(expected.udpConn, expected.quicConn)
 }
 
 func listenUDPForEndpoint(endpoint *net.UDPAddr) (*net.UDPConn, error) {
@@ -211,12 +296,11 @@ func closeL4HTTP3(udpConn *net.UDPConn, quicConn *quic.Conn) {
 }
 
 type l4TCPConn struct {
-	stream   l4Stream
-	udpConn  *net.UDPConn
-	quicConn *quic.Conn
-	remote   net.Addr
-	once     sync.Once
-	onClose  func()
+	stream  l4Stream
+	local   net.Addr
+	remote  net.Addr
+	once    sync.Once
+	onClose func()
 }
 
 type l4Stream interface {
@@ -259,7 +343,6 @@ func (c *l4TCPConn) Close() error {
 	c.once.Do(func() {
 		err = c.CloseWrite()
 		_ = c.CloseRead()
-		closeL4HTTP3(c.udpConn, c.quicConn)
 		if c.onClose != nil {
 			c.onClose()
 		}
@@ -267,10 +350,10 @@ func (c *l4TCPConn) Close() error {
 	return err
 }
 func (c *l4TCPConn) LocalAddr() net.Addr {
-	if c.udpConn == nil {
+	if c.local == nil {
 		return l4Addr("l4")
 	}
-	return c.udpConn.LocalAddr()
+	return c.local
 }
 func (c *l4TCPConn) RemoteAddr() net.Addr { return c.remote }
 func (c *l4TCPConn) SetDeadline(t time.Time) error {
