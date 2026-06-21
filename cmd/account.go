@@ -1,13 +1,21 @@
 package cmd
 
 import (
+	"fmt"
 	"log"
+	"text/tabwriter"
 	"time"
 
 	"github.com/Diniboy1123/usque/api"
 	"github.com/Diniboy1123/usque/config"
 	"github.com/spf13/cobra"
 )
+
+func writeTabbedLine(writer *tabwriter.Writer, format string, args ...any) {
+	if _, err := fmt.Fprintf(writer, format, args...); err != nil {
+		log.Fatalf("Failed to write output: %v\n", err)
+	}
+}
 
 var accountCmd = &cobra.Command{
 	Use:   "account",
@@ -29,50 +37,57 @@ var accountInfoCmd = &cobra.Command{
 			log.Fatalf("Failed to get account: %v\n", err)
 		}
 
-		cmd.Println("Account ID:                 ", account.ID)
+		writer := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+		defer func() {
+			if err := writer.Flush(); err != nil {
+				log.Fatalf("Failed to flush output: %v\n", err)
+			}
+		}()
+
+		writeTabbedLine(writer, "Account ID:\t%s\n", account.ID)
 
 		if len(account.AccountType) > 0 {
-			cmd.Println("Type:                       ", account.AccountType)
+			writeTabbedLine(writer, "Type:\t%s\n", account.AccountType)
 		}
 
 		if created, err := time.Parse(time.RFC3339Nano, account.Created); err == nil {
-			cmd.Println("Created:                    ", created.Format(time.DateTime))
+			writeTabbedLine(writer, "Created:\t%s\n", created.Format(time.DateTime))
 		}
 
 		if updated, err := time.Parse(time.RFC3339Nano, account.Updated); err == nil {
-			cmd.Println("Updated:                    ", updated.Format(time.DateTime))
+			writeTabbedLine(writer, "Updated:\t%s\n", updated.Format(time.DateTime))
 		}
 
 		if managed, err := time.Parse(time.RFC3339Nano, account.Managed); err == nil {
-			cmd.Println("Managed:                    ", managed.Format(time.DateTime))
+			writeTabbedLine(writer, "Managed:\t%s\n", managed.Format(time.DateTime))
 		}
 
 		if len(account.Organization) > 0 {
-			cmd.Println("Organization:               ", account.Organization)
+			writeTabbedLine(writer, "Organization:\t%s\n", account.Organization)
 		}
 
 		if len(account.Role) > 0 {
-			cmd.Println("Role:                       ", account.Role)
+			writeTabbedLine(writer, "Role:\t%s\n", account.Role)
 		}
 
 		if len(account.License) > 0 {
-			cmd.Println("Licence Key:                ", account.License)
+			writeTabbedLine(writer, "Licence Key:\t%s\n", account.License)
 		}
 
 		if account.PremiumData > 0 {
-			cmd.Println("Premium Data:               ", account.PremiumData)
+			writeTabbedLine(writer, "Premium Data:\t%v\n", account.PremiumData)
 		}
 
 		if account.Quota > 0 {
-			cmd.Println("Quota:                      ", account.Quota)
+			writeTabbedLine(writer, "Quota:\t%v\n", account.Quota)
 		}
 
 		if account.ReferralCount > 0 {
-			cmd.Println("Referral Count: ", account.ReferralCount)
+			writeTabbedLine(writer, "Referral Count:\t%v\n", account.ReferralCount)
 		}
 
 		if account.ReferralRenewalCount > 0 {
-			cmd.Println("Referral Renewal Countdown: ", account.ReferralRenewalCount)
+			writeTabbedLine(writer, "Referral Renewal Countdown:\t%v\n", account.ReferralRenewalCount)
 		}
 	},
 }
@@ -92,34 +107,41 @@ var accountDevicesCmd = &cobra.Command{
 			return
 		}
 
+		writer := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+		defer func() {
+			if err := writer.Flush(); err != nil {
+				log.Fatalf("Failed to flush output: %v\n", err)
+			}
+		}()
+
 		for index, account := range *devices {
-			cmd.Printf("Device #%d:\n", index+1)
-			cmd.Println("  ID:         ", account.ID)
+			writeTabbedLine(writer, "Device #%d:\n", index+1)
+			writeTabbedLine(writer, "\tID:\t%s\n", account.ID)
 
 			if len(account.Type) > 0 {
-				cmd.Println("  Type:       ", account.Type)
+				writeTabbedLine(writer, "\tType:\t%s\n", account.Type)
 			}
 
 			if len(account.Model) > 0 {
-				cmd.Println("  Model:      ", account.Model)
+				writeTabbedLine(writer, "\tModel:\t%s\n", account.Model)
 			}
 
 			if len(account.Name) > 0 {
-				cmd.Println("  Name:       ", account.Name)
+				writeTabbedLine(writer, "\tName:\t%s\n", account.Name)
 			}
 
 			if created, err := time.Parse(time.RFC3339Nano, account.Created); err == nil {
-				cmd.Println("  Created:    ", created.Format(time.DateTime))
+				writeTabbedLine(writer, "\tCreated:\t%s\n", created.Format(time.DateTime))
 			}
 
 			if activated, err := time.Parse(time.RFC3339Nano, account.Activated); err == nil {
-				cmd.Println("  Activated:  ", activated.Format(time.DateTime))
+				writeTabbedLine(writer, "\tActivated:\t%s\n", activated.Format(time.DateTime))
 			}
 
-			cmd.Println("  Active:     ", account.Active)
+			writeTabbedLine(writer, "\tActive:\t%t\n", account.Active)
 
 			if len(account.Role) > 0 {
-				cmd.Println("  Role:       ", account.Role)
+				writeTabbedLine(writer, "\tRole:\t%s\n", account.Role)
 			}
 		}
 	},
